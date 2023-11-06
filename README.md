@@ -11,13 +11,12 @@
 
 ## Table of contents
 
-* [Abstract](#Abstract)
-* [Report (ITA)](https://www.mdpi.com/2304-6740/11/11/421) and [Slides (EN)](https://github.com/giocoal/cluster-analysis-on-computational-chemistry-simulations-water-adsorption-on-atmosperic-particulate/blob/main/thesis%20manuscript%20and%20presentation%20slides/Thesis.pdf)
-* [Status](#status)
-* [Contact](#contact)
-* [License](#license)
-* [Contributing](#contributing)
-* [Contributors](#contributors)
+- [Abstract](#abstract)
+- 
+- [Status](#status)
+- [Contact](#contact)
+- [License](#license)
+- [Contributing](#contributing)
 
 ## Abstract
 
