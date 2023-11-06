@@ -12,7 +12,7 @@
 ## Table of contents
 
 - [Abstract](#abstract)
-- 
+- [Report (ITA)](https://github.com/giocoal/analysis-and-forecasting-tetouan-city-power-consumption-ARIMA-UCM-GRU/blob/main/report/Project_Report.pdf) and [Slides (EN)](https://www.slideshare.net/Giorgio469575/electricity-consumption-forecasting-using-arima-ucm-machine-learning-and-deep-learning-models) 
 - [Status](#status)
 - [Contact](#contact)
 - [License](#license)
