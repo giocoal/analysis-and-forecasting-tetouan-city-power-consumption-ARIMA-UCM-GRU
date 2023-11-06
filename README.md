@@ -6,22 +6,55 @@
 [![Issues][issues-shield]][issues-url]
 [![MIT License][license-shield]][license-url]
 [![LinkedIn][linkedin-shield]][linkedin-url]
-[![Paper][paper-shield]][paper-url]
-[![Thesis][thesis-shield]][thesis-url]
+[![Report][report-shield]][report-url]
+[![Slides][slides-shield]][slides-url]
 
 ## Table of contents
 
 * [Abstract](#Abstract)
-* [Paper](https://www.mdpi.com/2304-6740/11/11/421) and [Thesis](https://github.com/giocoal/cluster-analysis-on-computational-chemistry-simulations-water-adsorption-on-atmosperic-particulate/blob/main/thesis%20manuscript%20and%20presentation%20slides/Thesis.pdf)
-* [Requirements](#requirements)
-* [Usage](#usage)
+* [Report (ITA)](https://www.mdpi.com/2304-6740/11/11/421) and [Slides (EN)](https://github.com/giocoal/cluster-analysis-on-computational-chemistry-simulations-water-adsorption-on-atmosperic-particulate/blob/main/thesis%20manuscript%20and%20presentation%20slides/Thesis.pdf)
 * [Status](#status)
 * [Contact](#contact)
-* [Citation](#citation)
+* [License](#license)
+* [Contributing](#contributing)
+* [Contributors](#contributors)
 
 ## Abstract
 
 The forecasting of time series of electricity consumption plays an important role in efficient resource management and strategic planning in the energy sector. In this project, we analyse a univariate, homogeneous, high-frequency time series of electricity consumption measured every 10 minutes from 01/01/2017 to 30/11/2017, comparing statistical (ARIMA and UCM), Machine Learning (Random Forest and k-NN) and Deep Learning (GRU Recurrent Neural Network) approaches to model the time series and forecast consumption for the month of December 2017. The best performing of the models in each family, trained on data sampled between 01/01/2017 to 31/10/2017 (or a portion thereof) and validated on November 2017 data, resulted in the following error measures: $MAE_{ARIMA}=1010.08$, $MAE_{UCM}=1183.40$ and $MAE_{ML}= 1184.07$, leading the ARIMA approach to be the most accurate in forecasting among those tested.
+
+<p align="center">
+<img src="images/Validation.png" width="100%" />
+<em>Forecasts for the validation set (November 2017) made with the best models for each class.</em>
+</p>
+
+## Status
+
+ Project is: ![##c5f015](https://via.placeholder.com/15/c5f015/000000?text=+)  _Done_
+
+## Contact
+
+Feel free to contact me!
+- [Google Scholar](https://scholar.google.com/citations?user=XwyRP1wAAAAJ&hl=en&oi=sra)
+- [Linkedin](https://www.linkedin.com/in/giorgio-carbone-63154219b/)
+- [Github](https://github.com/giocoal)
+
+## License
+* >You can check out the full license [here](https://github.com/giocoal/analysis-and-forecasting-tetouan-city-power-consumption-ARIMA-UCM-GRU/blob/main/README.md)
+
+This project is licensed under the terms of the **MIT** license.
+
+## Contributing
+
+1. Fork it (<https://github.com/giocoal/analysis-and-forecasting-tetouan-city-power-consumption-ARIMA-UCM-GRU.git>)
+2. Create your feature branch (`git checkout -b feature/fooBar`)
+3. Commit your changes (`git commit -am 'Add some fooBar'`)
+4. Push to the branch (`git push origin feature/fooBar`)
+5. Create a new Pull Request
+
+# Contributors
+
+* [Giorgio Carbone](https://github.com/giocoal) 
 
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
@@ -38,9 +71,9 @@ The forecasting of time series of electricity consumption plays an important rol
 [linkedin-shield]: https://img.shields.io/badge/-LinkedIn-black.svg?style=for-the-badge&logo=linkedin&colorB=555
 [linkedin-url]: https://www.linkedin.com/in/giorgio-carbone-63154219b/
 [report-shield]: https://img.shields.io/badge/Read%20Report%20-grey?style=for-the-badge
-[report-url]: https://github.com/giocoal/cluster-analysis-on-computational-chemistry-simulations-water-adsorption-on-atmosperic-particulate/blob/main/thesis%20manuscript%20and%20presentation%20slides/Thesis.pdf
-[slides-shield]: https://img.shields.io/badge/Read%20Paper%20-grey?style=for-the-badge
-[slides-url]: https://www.mdpi.com/2304-6740/11/11/421
+[report-url]: https://github.com/giocoal/analysis-and-forecasting-tetouan-city-power-consumption-ARIMA-UCM-GRU/blob/main/report/Project_Report.pdf
+[slides-shield]: https://img.shields.io/badge/Read%20Slides%20-grey?style=for-the-badge
+[slides-url]: https://www.slideshare.net/Giorgio469575/electricity-consumption-forecasting-using-arima-ucm-machine-learning-and-deep-learning-models
 [product-screenshot]: images/screenshot.png
 [Next.js]: https://img.shields.io/badge/next.js-000000?style=for-the-badge&logo=nextdotjs&logoColor=white
 [Next-url]: https://nextjs.org/
