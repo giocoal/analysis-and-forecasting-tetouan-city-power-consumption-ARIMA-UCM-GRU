@@ -11,9 +11,8 @@
 
 ## Table of contents
 
-- [Electricity Consumption Forecasting Using Arima, UCM, Machine Learning (Random Forest and k-NN), and Deep Learning (GRU Recurrent Neural Network) Models](#electricity-consumption-forecasting-using-arima-ucm-machine-learning-random-forest-and-k-nn-and-deep-learning-gru-recurrent-neural-network-models)
-  - [Table of contents](#table-of-contents)
   - [Abstract](#abstract)
+  - [Report (ITA)](https://github.com/giocoal/analysis-and-forecasting-tetouan-city-power-consumption-ARIMA-UCM-GRU/blob/main/report/Project_Report.pdf) and [Slides (EN)](https://www.slideshare.net/Giorgio469575/electricity-consumption-forecasting-using-arima-ucm-machine-learning-and-deep-learning-models)
   - [Status](#status)
   - [Contact](#contact)
   - [License](#license)
