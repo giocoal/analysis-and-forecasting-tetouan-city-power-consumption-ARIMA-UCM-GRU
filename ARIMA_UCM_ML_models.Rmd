@@ -1,0 +1,1754 @@
+---
+title: "Arima, UCM, ML Models"
+author: "Carbone Giorgio"
+date: "2023-06-14"
+output: html_document
+---
+
+# 0. Setup & Import
+
+## Setup and useful functions
+
+```{r}
+set.seed(100)
+
+Sys.setenv(TZ='GMT') # imposto la time zone
+
+packages <- c("forecast", "KFAS", "xts", "fastDummies", "tsfknn", "MASS", "tidyr", "ggplot2", "lubridate", "randomForest", "ranger", "tibble", "tseries") # librerie
+
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+
+# Packages loading
+invisible(lapply(packages, library, character.only = TRUE))
+```
+
+```{r}
+stats <- function(actual,pred){
+  rmse <- sqrt(mean((actual - pred)^2))
+  mape <- mean(abs((actual - pred)/actual))*100
+  mae <- mean(abs(actual - pred))
+  cat("RMSE", rmse, "\nMAPE", mape, "\nMAE ", mae, "\n")
+  return(c(rmse, mape, mae))
+}
+
+# Significativitá regressori
+
+pars_test <- function(coef, var_coef){
+  test <- (1-pnorm(abs(coef)/sqrt(diag(var_coef))))*2
+  return(test)
+}
+```
+
+```{r}
+boxcoxtransform <- function(data, lambda) {
+  data_bc <- (data^lambda - 1) / lambda
+  return(data_bc)
+}
+
+boxcoxinverse <- function(data_bc, lambda) {
+  data <- (data_bc*lambda+1)^(1/lambda)
+  return(data)
+}
+```
+
+```{r}
+plot_pred <- function(pred, days=3){
+  diff <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)]-pred) # serie storica - storica
+  plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=3) # serie storica e storica
+  plot <- lines(pred, type = "l", col = "red", lwd=3)
+  zoom <- plot(data_xts[(val_index+144*(npred-days)):(val_index+144*npred-1)], lwd=3) # zoom serie storica e storica
+  zoom <- lines(pred, type = "l", col = "red", lwd=3)
+  c(diff, plot, zoom)
+}
+```
+
+```{r}
+theme_new <- theme_set(theme_light())
+```
+
+## Loading data
+
+Loading the time serie from the .csv file:
+
+```{r}
+working_dir = dirname(rstudioapi::getSourceEditorContext()$path)
+setwd(working_dir)
+
+data <- read.csv("./data/data2022_train.csv", colClasses=c("character", "numeric"))
+```
+
+```{r}
+real_data <- read.csv("./data/real_test.csv", colClasses=c("character", "numeric"))
+```
+
+
+Converting data to time series (xts) object:
+
+```{r}
+data_xts <- xts(data$y, as.POSIXct(data$X, format="%Y-%m-%d %H:%M:%S", tz="GMT"))
+real_data_xts <- xts(real_data$y, as.POSIXct(real_data$X, format="%Y-%m-%d %H:%M:%S", tz="GMT"))
+```
+
+```{r}
+periodicity(data_xts)
+```
+
+-   Dati equispaziati (istanti omogenei)
+-   Periodicità: 10 minuti
+
+```{r}
+head(data_xts, n = 5)
+```
+
+# 1. Data Exploration
+
+```{r}
+summary(data_xts)
+```
+
+```{r}
+periodicity(data_xts)
+```
+
+## Plot time series
+
+```{r}
+par(mar = c(5, 4, 4, 6) + 0.1)  # Imposta i margini per lasciare spazio alle etichette
+par(pin = c(4, 2))
+plot(data_xts)
+```
+
+```{r}
+
+# Plot serie storica vanilla
+plot(data_xts, main = "Energy Consumption vs Date")
+plot(as.zoo(data_xts), xlab = "Date", ylab = "Power ", main = "Power Consumption vs Date", panel.grid = "both")
+plot(apply.daily(data_xts,FUN=mean))
+plot(apply.weekly(data_xts,FUN=mean))
+plot(apply.monthly(data_xts,FUN=mean))
+
+msts_cons <- data_xts[1:(144*60)] |> msts(seasonal.periods = c(144, 144*7))
+p <- msts_cons |> mstl() |> autoplot()
+p
+ggsave('plots/ts_decomposition.jpg', p, height = 6 , width = 11)
+```
+
+```{r}
+plot(data_xts[1:144])
+plot(data_xts[1:144*21])
+p <- autoplot(data_xts[1:144*7]) + xlab('Day') + ylab('Power')
+p
+ggsave('plots/one_week.jpg', p, height = 3 , width = 5)
+```
+
+```{r}
+plot(data_xts[1:(144*30.2)], main = "Energy Consumption vs Date (Jan)")
+plot(data_xts[1:(144*7.2)], main = "Energy Consumption vs \n Date(First Week of Jan)")
+
+```
+
+## Outliers detection
+
+```{r}
+msts_cons <- data_xts[1:(144*60)] |> msts(seasonal.periods = c(144, 144*7))
+p <- msts_cons |> mstl() |> autoplot()
+p
+ggsave('plots/ts_decomposition.jpg', p, height = 6 , width = 11)
+```
+
+```{r}
+msts_cons<-data_xts[1:(144*100)] %>% msts( seasonal.periods = c(144, 144*7))
+msts_cons %>% mstl() %>% autoplot() +
+  theme(panel.background = element_rect(fill = "gray90"),
+        panel.grid.major = element_line(color = "white"),
+        panel.grid.minor = element_line(color = "white"),
+        text = element_text(size = 8))
+```
+
+```{r}
+p1 <- autoplot(data_xts["2017-01-14"]) + xlab('Hour') + ylab('Power') + scale_x_datetime(date_labels =  "%H %M")
+p1
+p2 <- autoplot(data_xts["2017-04-20"]) + xlab('Hour') + ylab('Power') + scale_x_datetime(date_labels =  "%H %M")
+p2
+p3 <- autoplot(data_xts["2017-08-30"]) + xlab('Hour') + ylab('Power') + scale_x_datetime(date_labels =  "%H %M")
+p3
+ggsave('plots/anomaly1.jpg', p1, height = 3 , width = 5)
+ggsave('plots/anomaly2.jpg', p2, height = 3 , width = 5)
+ggsave('plots/anomaly3.jpg', p3, height = 3 , width = 5)
+```
+
+```{r}
+plot(diff(data_xts,1))
+data_xts[diff(data_xts,1) < -7500 | diff(data_xts,1) > 7500] #|> index() |> as.Date()
+```
+
+```{r}
+plot(data_xts["2017-04-20"], main = "Anomalia (20-04-2017)")
+```
+
+## Hold-out
+
+```{r}
+tseq <- seq(from = index(data_xts[nrow(data_xts),])+600, length.out = 144*30, by = 600)
+data_xts_complete <- c(data_xts, xts(rep(as.numeric(NA), length(tseq)), tseq))
+cat(paste0("from: ", index(data_xts_complete[1]), "\nto:   ", index(data_xts_complete[nrow(data_xts_complete)])))
+```
+
+```{r}
+npred <- 30 # Number of days to forecast
+small_date <- "2017-09-01 00:00:00" # For a faster training I consider just September and October
+small_index <- which(index(data_xts_complete) == small_date)
+# I take november 2017 as the validation set
+val_date <- "2017-11-01 00:00:00"
+val_index <- which(index(data_xts_complete) == val_date)
+test_date <- "2017-12-01 00:00:00"
+test_index <- which(index(data_xts_complete) == test_date)
+cat(paste0("small_index: ", small_index,"\nval_index:   ", val_index, "\ntest_index:  ", test_index))
+```
+
+```{r}
+train <- data_xts_complete[1:(val_index-1)]
+small <- data_xts_complete[small_index:(val_index-1)]
+val <- data_xts_complete[val_index:(val_index+144*npred-1)]
+test <- data_xts_complete[test_index:nrow(data_xts_complete)]
+cat(paste0("small: ", nrow(small), "\ntrain: ", nrow(train), "\nval:   ", nrow(val), "\ntest:  ", nrow(test)))
+```
+
+## Non stazionarietà in varianza (Box-Cox transformation)
+
+Verifico non stazionarietà
+
+```{r}
+med <- tapply(data_xts, rep(1:334, each = 144), mean)
+sds <- tapply(data_xts, rep(1:334, each = 144), sd)
+plot(med, sds, xlab = "Mean", ylab = "Standard Deviatiion", main = "Box-Cox Plot \n (Grouped on a daily basis)") # 334 dots -> one for each day
+```
+
+Stimo lambda ottimale
+
+```{r}
+bc <- boxcox(sds ~ med)
+lambda <- bc$x[which.max(bc$y)]
+lambda
+```
+
+Applico trasformazione di box-cox
+
+```{r}
+data_xts_bc <- (data_xts^lambda - 1) / lambda
+
+med_bc <- tapply(data_xts_bc, rep(1:334, each = 144), mean)
+sds_bc <- tapply(data_xts_bc, rep(1:334, each = 144), sd)
+```
+
+Box-COx plot su dati trasformati
+
+```{r}
+plot(med_bc, sds_bc, xlab = "Mean", ylab = "Standard Deviatiion", main = "Box-Cox Plot \n (on Box-Cox transformed data)") # 334 dots -> one for each day
+plot(med, sds) # 334 dots -> one for each day
+plot(data_xts_bc)
+ggsave('plots/scatter.jpg', p, height = 3 , width = 5)
+
+a <- data.frame(cbind(med, sds))
+p <- ggplot(a, aes(x=med, y=sds)) + geom_point(size=0.8) + xlab('Mean') + ylab('Standard deviation')
+p
+ggsave('plots/scatter.jpg', p, height = 3 , width = 5)
+
+a <- data.frame(cbind(med_bc, sds_bc))
+p <- ggplot(a, aes(x=med_bc, y=sds_bc)) + geom_point(size=0.8) + xlab('Mean') + ylab('Standard deviation')
+p
+ggsave('plots/scatter_bc.jpg', p, height = 3 , width = 5)
+```
+
+Create separated dataset for transformed and non-transformed data
+
+```{r}
+train_bc <- boxcoxtransform(train, lambda)
+full_train <- merge(train, train_bc)
+small_bc <- boxcoxtransform(small, lambda)
+full_small <- merge(small, small_bc)
+val_bc <- boxcoxtransform(val, lambda)
+full_val <- merge(val, val_bc)
+```
+
+### Salvataggio dati trasformati e non / suddivisi in train, train ridotto, validation e test
+
+```{r}
+write.csv(as.data.frame(full_train), "train.csv")
+write.csv(as.data.frame(full_small), "small.csv")
+write.csv(as.data.frame(full_val), "val.csv")
+write.csv(as.data.frame(test), "test.csv")
+```
+
+## Non Stazionarietà in media e stagionalità
+
+Dicky-Fuller - KPSS per la stazionarietà in MEDIA (printa il numero di differenze semplici da applicare)
+
+```{r}
+library(urca)
+summary(ur.df(diff(train, 144)[145:length(diff(train, 144))], "trend", lags = 12, "AIC"))
+```
+
+```{r}
+summary(ur.kpss(diff(train, 144)[145:length(diff(train, 144))], type = "tau", lags = "short"))
+```
+
+```{r}
+ndiffs(diff(train, 144), alpha = 0.05, test = "kpss", type = "trend")
+```
+
+Dicky-Fuller - KPSS per la stagionalità (printa il numero di differenze stagionalI)
+
+```{r}
+nsdiffs(ts(train, frequency = 144))
+```
+
+```{r}
+plot(train[1:(144*60)])
+plot(diff(train, 144)[1:(144*60)])
+plot(diff(train, 1008)[1:(144*60)])
+plot(diff(diff(train, 144), 1008)[1:(144*60)])
+```
+
+Confermo osservando acf e pcad del processo trasformato con box cos, e di quello differenziato stagionalmente.
+
+```{r}
+Acf(diff(train, 144)[1:(144*60)], 600)
+Pacf(diff(train, 144)[1:(144*60)], 600)
+Acf(diff(train, 1008)[1:(144*60)], 600)
+Pacf(diff(train, 1008)[1:(144*60)], 600)
+Acf(diff(diff(train, 144), 1008)[1:(144*60)], 600)
+Pacf(diff(diff(train, 144), 1008)[1:(144*60)], 600)
+```
+
+```{r}
+Acf(train_bc, 600)
+Pacf(train_bc, 600)
+```
+
+# Modeling: Setup
+
+```{r}
+stats_results <- data.frame(matrix(nrow=0,ncol=4))
+colnames(stats_results)<-c("Model", "RMSE", "MAPE", "MAE")
+```
+
+# ARIMA
+
+## Senza regressori e con differenza stagionale
+
+### ARIMA 0:
+
+```{r}
+arima_mod0 <- function(train) {
+  Arima(y = ts(train, freq = 144),
+              order = c(0, 0, 0),
+              seasonal = c(0, 1, 0),
+              include.constant = FALSE,
+              method = "CSS")}
+arima_mod0_train <- arima_mod0(train)
+summary(arima_mod0_train)
+```
+
+```{r}
+Acf(arima_mod0_train$residuals, 144*60)
+Pacf(arima_mod0_train$residuals, 144*60)
+```
+
+```{r}
+arima_pred0 <- forecast(arima_mod0_train, 144*npred)
+plot(arima_pred0)
+#abline(v=val_index*600)
+
+arima_pred0 <- xts(arima_pred0$mean, index(val))
+```
+
+```{r}
+plot_pred(arima_pred0)
+
+stats_results[nrow(stats_results) + 1,] <- c("arima_mod1", stats(val, arima_pred0))
+```
+
+### ARIMA 1
+
+```{r}
+arima_mod1 <- function(train) {
+  Arima(y = ts(train, freq = 144),
+              order = c(0, 0, 0),
+              seasonal = c(0, 1, 1),
+              include.constant = FALSE,
+              method = "CSS")}
+arima_mod1_train <- arima_mod1(train)
+summary(arima_mod1_train)
+```
+
+```{r}
+Acf(arima_mod1_train$residuals, 144*50)
+plot(Acf(arima_mod1_train$residuals, 144))
+Pacf(arima_mod1_train$residuals, 144*50)
+Pacf(arima_mod1_train$residuals, 144*2)
+plot(Pacf(arima_mod1_train$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+```{r}
+arima_pred1 <- forecast(arima_mod1_train, 144*npred)
+plot(arima_pred1)
+#abline(v=val_index*600)
+
+arima_pred1 <- xts(arima_pred1$mean, index(val))
+```
+
+```{r}
+plot_pred(arima_pred1)
+
+stats_results[nrow(stats_results) + 1,] <- c("arima_mod1", stats(val, arima_pred1))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=3)
+plot <- lines(arima_pred1, type = "l", col = "red", lwd=3)
+plot
+```
+
+
+### ARIMA 2 (airline)
+
+```{r}
+arima_mod2 <- function(train) {
+  Arima(y = ts(train, freq = 144),
+              order = c(0, 1, 1),
+              seasonal = c(0, 1, 1),
+              include.constant = FALSE,
+              method = "CSS")}
+arima_mod2_train <- arima_mod2(train)
+summary(arima_mod2_train)
+```
+
+```{r}
+Acf(arima_mod2_train$residuals, 144*50)
+plot(Acf(arima_mod2_train$residuals, 144))
+Pacf(arima_mod2_train$residuals, 144*50)
+Pacf(arima_mod2_train$residuals, 144*2)
+plot(Pacf(arima_mod2_train$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+```{r}
+arima_pred2 <- forecast(arima_mod2_train, 144*npred)
+plot(arima_pred2)
+#abline(v=val_index*600)
+
+arima_pred2 <- xts(arima_pred2$mean, index(val))
+```
+
+```{r}
+plot_pred(arima_pred2)
+
+stats_results[nrow(stats_results) + 1,] <- c("arima_mod2", stats(val, arima_pred2))
+```
+
+
+### ARIMA 8
+
+```{r}
+arima_mod4 <- function(train) {
+  Arima(y = ts(train, freq = 144),
+              order = c(2, 1, 1),
+              seasonal = c(0, 1, 1),
+              include.constant = FALSE,
+              method = "CSS")}
+arima_mod4_train <- arima_mod4(train)
+summary(arima_mod4_train)
+```
+
+```{r}
+Acf(arima_mod4_train$residuals, 144*50)
+plot(Acf(arima_mod4_train$residuals, 144))
+Pacf(arima_mod4_train$residuals, 144*50)
+Pacf(arima_mod4_train$residuals, 144*2)
+plot(Pacf(arima_mod4_train$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+```{r}
+arima_pred4 <- forecast(arima_mod4_train, 144*npred)
+plot(arima_pred4)
+#abline(v=val_index*600)
+
+arima_pred4 <- xts(arima_pred4$mean, index(val))
+```
+
+```{r}
+plot_pred(arima_pred4)
+
+stats_results[nrow(stats_results) + 1,] <- c("arima_mod4", stats(val, arima_pred4))
+```
+
+### ARIMA 1.7
+
+```{r}
+arima_mod4 <- function(train) {
+  Arima(y = ts(train, freq = 144),
+              order = c(3, 1, 0),
+              seasonal = c(0, 1, 1),
+              include.constant = FALSE,
+              method = "CSS")}
+arima_mod4_train <- arima_mod4(train)
+summary(arima_mod4_train)
+```
+
+```{r}
+Acf(arima_mod4_train$residuals, 144*50)
+plot(Acf(arima_mod4_train$residuals, 144))
+Pacf(arima_mod4_train$residuals, 144*50)
+Pacf(arima_mod4_train$residuals, 144*2)
+plot(Pacf(arima_mod4_train$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+```{r}
+arima_pred4 <- forecast(arima_mod4_train, 144*npred)
+plot(arima_pred4)
+#abline(v=val_index*600)
+
+arima_pred4 <- xts(arima_pred4$mean, index(val))
+```
+
+```{r}
+plot_pred(arima_pred4)
+
+stats_results[nrow(stats_results) + 1,] <- c("arima_mod4", stats(val, arima_pred4))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=3)
+plot <- lines(arima_pred4, type = "l", col = "red", lwd=3)
+plot
+```
+### AUTO ARIMA no regressori
+
+```{r}
+#arima_mod5 <- function(train){
+#  auto.arima(y = ts(train, freq = 144),
+#             ic = 'aic',
+#             stepwise = FALSE,
+#             max.p = 3,
+#             max.q = 2,
+#             start.p = 1,
+#             start.q = 1,
+#             start.P = 1,
+#             start.Q = 1,
+#             method = "CSS")
+#}
+arima_mod5 <- function(train) {
+              Arima(y = ts(train, freq = 144),
+                          order = c(2, 1, 0),
+                          seasonal = c(0, 1, 0),
+                          include.constant = FALSE,
+                          method = "CSS")}
+
+arima_mod5_train <- arima_mod5(train)
+summary(arima_mod5_train)
+```
+
+```{r}
+Acf(arima_mod5_train$residuals, 144*50)
+plot(Acf(arima_mod5_train$residuals, 144))
+Pacf(arima_mod5_train$residuals, 144*50)
+Pacf(arima_mod5_train$residuals, 144*2)
+plot(Pacf(arima_mod5_train$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+```{r}
+arima_pred5 <- forecast(arima_mod5_train, 144*npred)
+plot(arima_pred5)
+#abline(v=val_index*600)
+
+arima_pred5 <- xts(arima_pred5$mean, index(val))
+```
+
+```{r}
+plot_pred(arima_pred5)
+
+stats_results[nrow(stats_results) + 1,] <- c("arima_mod5", stats(val, arima_pred5))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=3)
+plot <- lines(arima_pred5, type = "l", col = "red", lwd=3)
+plot
+```
+
+## ARIMAX DUMMY
+
+```{r}
+train_dummy <- fastDummies::dummy_cols(format(index(train), "%u"), remove_selected_columns = TRUE, remove_first_dummy = TRUE)
+rownames(train_dummy) <- index(train)
+colnames(train_dummy) <- c("mart", "merc", "giov", "ven", "sab", "dom")
+train_dummy <- as.matrix(train_dummy)
+
+val_dummy <- fastDummies::dummy_cols(format(index(val), "%u"), remove_selected_columns = TRUE, remove_first_dummy = TRUE)
+rownames(val_dummy) <- index(val)
+colnames(val_dummy) <- c("mart", "merc", "giov", "ven", "sab", "dom")
+val_dummy <- as.matrix(val_dummy)
+
+#train_arima <- cbind(train, train_dummy)
+```
+
+### MODELLO 1.9 ARIMA(1,0,2)(0,1,0)[144] GS
+
+```{r}
+arima_mod6 <- function(train, train_dummy){
+  auto.arima(y = ts(train, freq = 144),
+             ic = 'aic',
+             stepwise = FALSE,
+             max.p = 2,
+             max.q = 2,
+             start.p = 0,
+             start.q = 0,
+             start.P = 0,
+             start.Q = 0,
+             xreg = train_dummy)
+}
+
+arima_mod6_train <- arima_mod6(train, train_dummy)
+summary(arima_mod6_train)
+```
+
+```{r}
+Acf(arima_mod6_train$residuals, 144*50)
+plot(Acf(arima_mod6_train$residuals, 144))
+Pacf(arima_mod6_train$residuals, 144*50)
+Pacf(arima_mod6_train$residuals, 144*2)
+plot(Pacf(arima_mod6_train$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+```{r}
+arima_pred6 <- forecast(arima_mod6_train, 144*npred)
+plot(arima_pred6)
+#abline(v=val_index*600)
+
+arima_pred6 <- xts(arima_pred6$mean, index(val))
+```
+
+```{r}
+plot_pred(arima_pred6)
+
+stats_results[nrow(stats_results) + 1,] <- c("arima_mod6", stats(val, arima_pred6))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=3)
+plot <- lines(arima_pred6, type = "l", col = "red", lwd=3)
+plot
+```
+
+### MODELLO 1.10 ARIMA(2,1,0)(0,1,1)[144] GS/GC
+
+```{r}
+arima_mod7 <- function(train, train_dummy){
+  Arima(y = ts(train, freq = 144),
+              order = c(1, 1, 0),
+              seasonal = c(0, 1, 1),
+              xreg = train_dummy,
+              include.drift = TRUE,
+              include.constant = FALSE,
+              method = "CSS")}
+
+arima_mod7_train <- arima_mod7(train, train_dummy)
+summary(arima_mod7_train)
+```
+
+```{r}
+Acf(arima_mod7_train$residuals, 144*50)
+plot(Acf(arima_mod7_train$residuals, 144))
+Pacf(arima_mod7_train$residuals, 144*50)
+Pacf(arima_mod7_train$residuals, 144*2)
+plot(Pacf(arima_mod7_train$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+```{r}
+arima_pred7 <- forecast(arima_mod7_train, 144*npred, xreg = val_dummy)
+plot(arima_pred7)
+#abline(v=val_index*600)
+
+arima_pred7 <- xts(arima_pred7$mean, index(val))
+```
+
+```{r}
+plot_pred(arima_pred7)
+
+stats_results[nrow(stats_results) + 1,] <- c("arima_mod7", stats(val, arima_pred7))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=3)
+plot <- lines(arima_pred7, type = "l", col = "red", lwd=3)
+plot
+```
+
+### MODELLO 1.10 ARIMA(0,0,1)(1,0,0)[144] GR
+
+```{r}
+arima_mod8 <- function(train, train_dummy){
+  Arima(y = ts(train, freq = 144),
+              order = c(0, 0, 0),
+              seasonal = c(1, 0, 0),
+              xreg = train_dummy,
+              include.constant = FALSE,
+              method = "CSS")}
+
+arima_mod8_train <- arima_mod8(train, train_dummy)
+summary(arima_mod8_train)
+```
+
+```{r}
+Acf(arima_mod8_train$residuals, 144*10)
+plot(Acf(arima_mod8_train$residuals, 144))
+Pacf(arima_mod8_train$residuals, 144*10)
+Pacf(arima_mod8_train$residuals, 144*2)
+plot(Pacf(arima_mod8_train$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+```{r}
+arima_pred8 <- forecast(arima_mod8_train, 144*npred, xreg = val_dummy)
+plot(arima_pred8)
+#abline(v=val_index*600)
+
+arima_pred8 <- xts(arima_pred8$mean, index(val))
+```
+
+```{r}
+plot_pred(arima_pred8)
+
+stats_results[nrow(stats_results) + 1,] <- c("arima_mod8", stats(val, arima_pred8))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=3)
+plot <- lines(arima_pred8, type = "l", col = "red", lwd=3)
+plot
+```
+
+
+
+## ARIMAX SINUSOIDI
+
+### MIGLIORE: SARIMA(0,0,0)(1,0,0)[144] (w/ 9 weekly sinusoids) GC -> 1.12
+
+```{r}
+
+vj <- c(1,2,3,4,5,6,7,8,9,10)
+vt <- 1:(nrow(data_xts_complete))
+
+s_week <- 24*6*7 # base frequency for weekly seasonality (6 observation per hour, 24 hours per day, 7 days per week)
+
+freqt_weekly <- outer(vt,vj)*2*pi/s_week
+co_weekly <- cos(freqt_weekly)
+si_weekly <- sin(freqt_weekly)
+colnames(co_weekly) <- paste0("cosw",vj)
+colnames(si_weekly) <- paste0("sinw",vj)
+sinusoids_weekly <- cbind(co_weekly,
+                          si_weekly)
+```
+
+```{r}
+arima_w_sinusoids <- function(train, sinusoids) {
+  Arima(y = ts(train, freq = 144),
+        order = c(0, 0, 0),
+        seasonal = c(1, 0, 0),
+        include.constant = FALSE,
+        xreg = sinusoids,
+        method = 'CSS')}
+
+model_sinusoids <- arima_w_sinusoids(train, sinusoids_weekly[1:(val_index-1),])
+summary(model_sinusoids)
+```
+
+```{r}
+model_sinusoids_predictions <- forecast(model_sinusoids, 144*npred,
+                                        xreg=sinusoids_weekly[val_index:(test_index-1),])
+model_sinusoids_predictions <- xts(model_sinusoids_predictions$mean, index(val))
+```
+
+```{r}
+Acf(model_sinusoids$residuals, 144*50)
+plot(Acf(model_sinusoids$residuals, 144))
+Pacf(model_sinusoids$residuals, 144*50)
+Pacf(model_sinusoids$residuals, 144*2)
+plot(Pacf(model_sinusoids$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+
+```{r}
+plot_pred(model_sinusoids_predictions)
+
+stats_results[nrow(stats_results) + 1,] <- c("ok", stats(val, model_sinusoids_predictions))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=3)
+plot <- lines(model_sinusoids_predictions, type = "l", col = "red", lwd=3)
+plot
+```
+```{r}
+write.zoo(model_sinusoids_predictions, file = "./data/previsioni/arima_validation.csv", sep = ",", index.name = "Date", col.names = c("", "y"))
+```
+
+
+#### Prediction
+
+```{r}
+training_complete <- rbind(train, val)
+```
+
+```{r}
+model_sinusoids_final <- arima_w_sinusoids(training_complete, # I work on the original values
+                                           sinusoids_weekly[1:(test_index-1),])
+summary(model_sinusoids_final)
+```
+
+```{r}
+december_predictions_sinusoids <- forecast(model_sinusoids_final, 144*npred,
+                                           xreg=sinusoids_weekly[test_index:nrow(sinusoids_weekly),])
+december_predictions_sinusoids <- xts(december_predictions_sinusoids$mean, index(test))
+```
+ 
+```{r}
+write.zoo(december_predictions_sinusoids, file = "./data/previsioni/arima_test.csv", sep = ",", index.name = "Date", col.names = c("", "y"))
+```
+
+### SARIMA(0,0,0)(1,0,0)[144] GR (9 sinusoidi per stagionalità giornaliera) -> 1.13
+
+```{r}
+# 10 sinusoidi per modellare la stagionalità giornaliera
+
+vj <- c(1,2,3,4,5,6,8,9,10)
+vt <- 1:(nrow(data_xts_complete))
+
+s_daily <- 24*6
+
+freqt_daily <- outer(vt,vj)*2*pi/s_daily
+co_daily <- cos(freqt_daily)
+si_daily <- sin(freqt_daily)
+colnames(co_daily) <- paste0("cosd",vj)
+colnames(si_daily) <- paste0("sind",vj)
+
+sinusoids_daily <- cbind(co_daily,
+                         si_daily)
+
+
+# 10 sinusoidi per modellare la stagionalità settimanale
+
+s_weekly <- 24*6*7
+
+freqt_weekly <- outer(vt,vj)*2*pi/s_weekly
+co_weekly <- cos(freqt_weekly)
+si_weekly <- sin(freqt_weekly)
+colnames(co_weekly) <- paste0("cosw",vj)
+colnames(si_weekly) <- paste0("sinw",vj)
+
+sinusoids_weekly <- cbind(co_weekly,
+                          si_weekly)
+```
+
+Combinazione sinusoidi stagionali e giornaliere
+
+```{r}
+sinusoids_weekly_daily <- cbind(sinusoids_daily,
+                                sinusoids_weekly)
+```
+
+
+```{r}
+arima_w_sinusoids <- function(train, sinusoids) {
+  Arima(y = ts(train, freq = 144),
+        order = c(0, 0, 0),
+        seasonal = c(1, 0, 0),
+        include.constant = FALSE,
+        xreg = sinusoids,
+        method = 'CSS')}
+
+model_sinusoids <- arima_w_sinusoids(train, sinusoids_daily[1:(val_index-1),])
+summary(model_sinusoids)
+```
+
+```{r}
+model_sinusoids_predictions <- forecast(model_sinusoids, 144*npred,
+                                        xreg=sinusoids_daily[val_index:(test_index-1),])
+model_sinusoids_predictions <- xts(model_sinusoids_predictions$mean, index(val))
+```
+
+```{r}
+Acf(model_sinusoids$residuals, 144*50)
+plot(Acf(model_sinusoids$residuals, 144))
+Pacf(model_sinusoids$residuals, 144*50)
+Pacf(model_sinusoids$residuals, 144*2)
+plot(Pacf(model_sinusoids$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+
+```{r}
+plot_pred(model_sinusoids_predictions)
+
+stats_results[nrow(stats_results) + 1,] <- c("ok", stats(val, model_sinusoids_predictions))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=3)
+plot <- lines(model_sinusoids_predictions, type = "l", col = "red", lwd=3)
+plot
+```
+
+
+
+### SARIMA(0,0,0)(1,0,0)[144] 9 daily sinusoids + 6 dummies weekly -> 1.14
+
+```{r}
+train_dummy <- fastDummies::dummy_cols(format(index(train), "%u"), remove_selected_columns = TRUE, remove_first_dummy = TRUE)
+rownames(train_dummy) <- index(train)
+colnames(train_dummy) <- c("mart", "merc", "giov", "ven", "sab", "dom")
+train_dummy <- as.matrix(train_dummy)
+
+val_dummy <- fastDummies::dummy_cols(format(index(val), "%u"), remove_selected_columns = TRUE, remove_first_dummy = TRUE)
+rownames(val_dummy) <- index(val)
+colnames(val_dummy) <- c("mart", "merc", "giov", "ven", "sab", "dom")
+val_dummy <- as.matrix(val_dummy)
+
+dummy = rbind(train_dummy, val_dummy)
+dummy = rbind(dummy, matrix(NA, nrow = nrow(data_xts_complete) - nrow(dummy), ncol = ncol(dummy)))
+
+# 10 sinusoidi per modellare la stagionalità giornaliera
+
+vj <- c(1,2,3,4,5,6,8,9,10)
+vt <- 1:(nrow(data_xts_complete))
+
+s_daily <- 24*6
+
+freqt_daily <- outer(vt,vj)*2*pi/s_daily
+co_daily <- cos(freqt_daily)
+si_daily <- sin(freqt_daily)
+colnames(co_daily) <- paste0("cosd",vj)
+colnames(si_daily) <- paste0("sind",vj)
+
+sinusoids_daily <- cbind(co_daily,si_daily)
+
+dummy_sinusoids_daily = cbind(dummy, sinusoids_daily)
+
+#train_arima <- cbind(train, train_dummy)
+```
+
+```{r}
+arima_w_sinusoids <- function(train, sinusoids) {
+  Arima(y = ts(train, freq = 144),
+        order = c(0, 0, 0),
+        seasonal = c(1, 0, 0),
+        include.constant = FALSE,
+        xreg = sinusoids,
+        method = 'CSS')}
+
+model_sinusoids <- arima_w_sinusoids(train, dummy_sinusoids_daily[1:(val_index-1),])
+summary(model_sinusoids)
+```
+
+```{r}
+model_sinusoids_predictions <- forecast(model_sinusoids, 144*npred,
+                                   xreg=dummy_sinusoids_daily[val_index:(test_index-1),])
+model_sinusoids_predictions <- xts(model_sinusoids_predictions$mean, index(val))
+```
+
+```{r}
+Acf(model_sinusoids$residuals, 144*50)
+plot(Acf(model_sinusoids$residuals, 144))
+Pacf(model_sinusoids$residuals, 144*50)
+Pacf(model_sinusoids$residuals, 144*2)
+plot(Pacf(model_sinusoids$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+
+```{r}
+plot_pred(model_sinusoids_predictions)
+
+stats_results[nrow(stats_results) + 1,] <- c("ok", stats(val, model_sinusoids_predictions))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=3)
+plot <- lines(model_sinusoids_predictions, type = "l", col = "red", lwd=3)
+plot
+```
+
+### SARIMA(0,0,0)(1,0,0)[144] (w/ 8 weekly sinusoids) GC
+
+```{r}
+
+vj <- c(1,2,3,4,5,6,7,8,9,10)
+vt <- 1:(nrow(data_xts_complete))
+
+s_week <- 24*6*7 # base frequency for weekly seasonality (6 observation per hour, 24 hours per day, 7 days per week)
+
+freqt_weekly <- outer(vt,vj)*2*pi/s_week
+co_weekly <- cos(freqt_weekly)
+si_weekly <- sin(freqt_weekly)
+colnames(co_weekly) <- paste0("cosw",vj)
+colnames(si_weekly) <- paste0("sinw",vj)
+sinusoids_weekly <- cbind(co_weekly,
+                          si_weekly)
+```
+
+
+
+### 1) SARIMA(0,0,0)(1,0,0)[144] (w/ weekly sinusoids) GC
+
+```{r}
+
+vj <- c(1,2,3,4,5,6,8,9,10)
+vt <- 1:(nrow(data_xts_complete))
+
+s_week <- 24*6*7 # base frequency for weekly seasonality (6 observation per hour, 24 hours per day, 7 days per week)
+
+freqt_weekly <- outer(vt,vj)*2*pi/s_week
+co_weekly <- cos(freqt_weekly)
+si_weekly <- sin(freqt_weekly)
+colnames(co_weekly) <- paste0("cosw",vj)
+colnames(si_weekly) <- paste0("sinw",vj)
+sinusoids_weekly <- cbind(co_weekly,
+                          si_weekly)
+```
+
+```{r}
+arima_w_sinusoids <- function(train, sinusoids) {
+  Arima(y = ts(train, freq = 144),
+        order = c(3, 0, 0),
+        seasonal = c(0, 1, 1),
+        include.constant = FALSE,
+        xreg = sinusoids,
+        method = 'CSS')}
+
+model_sinusoids <- arima_w_sinusoids(train, sinusoids_weekly[1:(val_index-1),])
+summary(model_sinusoids)
+```
+
+```{r}
+model_sinusoids_predictions <- forecast(model_sinusoids, 144*npred,
+                                        xreg=sinusoids_weekly[val_index:(test_index-1),])
+model_sinusoids_predictions <- xts(model_sinusoids_predictions$mean, index(val))
+```
+
+```{r}
+Acf(model_sinusoids$residuals, 144*50)
+plot(Acf(model_sinusoids$residuals, 144))
+Pacf(model_sinusoids$residuals, 144*50)
+Pacf(model_sinusoids$residuals, 144*2)
+plot(Pacf(model_sinusoids$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+
+```{r}
+plot_pred(model_sinusoids_predictions)
+
+stats_results[nrow(stats_results) + 1,] <- c("ok", stats(val, model_sinusoids_predictions))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=3)
+plot <- lines(model_sinusoids_predictions, type = "l", col = "red", lwd=3)
+plot
+```
+
+## ARIMA Su serie aggregata
+
+### 2) SARIMA(0,1,1)(0,0,1)[7] (w/ hour average)
+
+```{r}
+# Perform hour aggregation on the train set 
+train_meanhour <- period.apply(train, endpoints(train, "hours"), mean)
+index(train_meanhour) <- index(train_meanhour)-600*2
+
+train_byhour <- vector('list', 24)
+for (hour in 1:24) {
+  train_byhour[[hour]] <- train_meanhour[seq(hour, length(train_meanhour), 24)]
+}
+
+# Perform hour aggregation on the val set
+val_meanhour <- period.apply(val, endpoints(val, "hours"), mean)
+index(val_meanhour) <- index(val_meanhour)-600*2
+
+val_byhour <- vector('list', 24)
+for (hour in 1:24) {
+  val_byhour[[hour]] <- val_meanhour[seq(hour, length(val_meanhour), 24)]
+  }
+```
+
+```{r}
+arima_byhour <- vector('list', 24)
+for (hour in 1:24) {
+  arima_byhour[[hour]] <- Arima(y = ts(train_byhour[[hour]], freq = 7),
+                                order = c(0, 1, 1),
+                                seasonal = c(0, 0, 1),
+                                include.constant = FALSE)
+  }
+```
+
+```{r}
+arima_byhour_predictions <- vector('list', 24)
+for (hour in 1:24) {
+  arima_byhour_predictions[[hour]] <- forecast(arima_byhour[[hour]], npred)
+  arima_byhour_predictions[[hour]] <- xts(arima_byhour_predictions[[hour]]$mean, index(val_byhour[[hour]]))
+}
+```
+
+```{r}
+arima_byhour_predictions_merged <- do.call(rbind, arima_byhour_predictions)
+```
+
+```{r}
+# I need to restore the original time frequency. I do that via spline approximation:
+temp <- xts(rep(as.numeric(NA), length(val)), index(val))
+model_hour_predictions <- merge(temp, arima_byhour_predictions_merged)$arima_byhour_predictions_merged
+model_hour_predictions <- na.spline(model_hour_predictions, na.rm = FALSE)
+model_hour_predictions <- na.locf(model_hour_predictions, na.rm = FALSE)
+model_hour_predictions <- na.locf(model_hour_predictions, fromLast = TRUE)
+names(model_hour_predictions) <- "V1"
+```
+
+```{r}
+plot_pred(model_hour_predictions)
+stats_results[nrow(stats_results) + 1,] <- c("SARIMA(0,1,1)(0,0,1)[7] (w/ hour average)", 
+                                             stats(val, model_hour_predictions))
+```
+```{r}
+Acf(arima_byhour[[12]]$residuals, 40)
+plot(Acf(arima_byhour[[12]]$residuals, 40))
+Pacf(arima_byhour[[12]]$residuals, 40)
+Pacf(arima_byhour[[12]]$residuals, 40)
+plot(Pacf(arima_byhour[[12]]$residuals, 144), ylim = c(-0.1, 0.1))
+```
+
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=2)
+plot <- lines(model_hour_predictions, type = "l", col = "red", lwd=2)
+plot
+```
+
+# UCM 
+
+## Validation performance 2
+
+```{r}
+train_ucm <- log(rbind(small, val))
+train_ucm[(nrow(train_ucm) - 4319):nrow(train_ucm), ] <- NA
+```
+
+```{r}
+library(KFAS)
+
+mod_validation <- SSModel(
+  train_ucm~SSMtrend(2, list(NA,NA))+SSMseasonal(144, NA, "trigonometric", harmonics=1:10) #pela consiglia tra 10 e 20 sinusoidi
+      +SSMseasonal(1008, NA, "trigonometric", harmonics=1:10),
+              H=NA
+  )
+```
+```{r}
+mod_validation$P1inf[] <- 0 #leva gli infiniti dalle varianze
+mod_validation$a1[1] <- mean(log(energy_ts["2017-09-01/2017-09-31"])) #valore atteso del vettore di stato al tempo 1
+```
+
+```{r}
+vy<-var(train_ucm, na.rm = TRUE)
+diag(mod_validation$P1) <-vy*10 #matrice covarianza del vettore di stato al tempo 1 
+```
+
+```{r}
+pars <- log(c(
+  logVarEta = vy/10, 
+  logVarZeta = vy/10000, #slope
+  logVarOm1 = vy/1000,#stag giornaliera 
+  logVarOm7 = vy/10000, #stag settimanale
+  logVarEps = vy/10 #white noise
+))
+```
+
+```{r}
+updt1 <- function(pars, model){
+  nq <-nrow(model$Q[,,1])
+  model$Q[1,1,1] <- exp(pars[1])
+  model$Q[2,2,1] <- exp(pars[2])
+  
+  
+  diag(model$Q[3:34,3:34,1]) <- exp(pars[3]) #2+num_harmonics*2
+  diag(model$Q[35:nq,35:nq,1]) <- exp(pars[4])
+  
+  model$H[1,1,1] <- exp(pars[5])
+  model
+}
+```
+
+```{r}
+fit_validation <- fitSSM(mod_validation, pars, updt1)
+fit_validation$optim.out
+```
+
+```{r}
+kfs_validation <- KFS(fit_validation$model, smoothing = c("state", "signal", "disturbance")) #, filtering = c("state", "signal")) 
+```
+
+```{r}
+ucm_validation_predictions <- exp(xts(kfs_validation$muhat[,1], index(train_ucm)))
+names(ucm_validation_predictions) <- "V1"
+```
+
+```{r}
+plot_pred(ucm_validation_predictions)
+stats_results[nrow(stats_results) + 1,] <- c("UCM", stats(val, ucm_validation_predictions))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=2)
+plot <- lines(ucm_validation_predictions["2017-11-01/"], type = "l", col = "red", lwd=2)
+plot
+```
+```{r}
+alphahat = exp(xts(kfs_validation$alphahat[, "level"], index(train_ucm)))
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=2)
+plot <- lines(alphahat, col = "red", lwd = 3)
+plot
+```
+```{r}
+write.zoo(ucm_validation_predictions["2017-11-01/"], file = "./data/previsioni/ucm_validation.csv", sep = ",", index.name = "Date", col.names = c("", "y"))
+```
+
+## DECEMBER 2
+
+```{r}
+train_ucm <- rbind(small, val)
+train_ucm <- log(rbind(train_ucm, test))
+train_ucm[(nrow(train_ucm) - 4319):nrow(train_ucm), ] <- NA
+```
+
+```{r}
+library(KFAS)
+
+mod_validation <- SSModel(
+  train_ucm~SSMtrend(2, list(NA,NA))+SSMseasonal(144, NA, "trigonometric", harmonics=1:10) #pela consiglia tra 10 e 20 sinusoidi
+      +SSMseasonal(1008, NA, "trigonometric", harmonics=1:10),
+              H=NA
+  )
+```
+```{r}
+mod_validation$P1inf[] <- 0 #leva gli infiniti dalle varianze
+mod_validation$a1[1] <- mean(train_ucm, na.rm = TRUE) #valore atteso del vettore di stato al tempo 1
+```
+
+```{r}
+vy<-var(train_ucm, na.rm = TRUE)
+diag(mod_validation$P1) <-vy*10 #matrice covarianza del vettore di stato al tempo 1 
+```
+
+```{r}
+pars <- log(c(
+  logVarEta = vy/10, 
+  logVarZeta = vy/10000, #slope
+  logVarOm1 = vy/1000,#stag giornaliera 
+  logVarOm7 = vy/10000, #stag settimanale
+  logVarEps = vy/10 #white noise
+))
+```
+
+```{r}
+updt1 <- function(pars, model){
+  nq <-nrow(model$Q[,,1])
+  model$Q[1,1,1] <- exp(pars[1])
+  model$Q[2,2,1] <- exp(pars[2])
+  
+  
+  diag(model$Q[3:34,3:34,1]) <- exp(pars[3]) #2+num_harmonics*2
+  diag(model$Q[35:nq,35:nq,1]) <- exp(pars[4])
+  
+  model$H[1,1,1] <- exp(pars[5])
+  model
+}
+```
+
+```{r}
+fit_validation <- fitSSM(mod_validation, pars, updt1)
+fit_validation$optim.out
+```
+
+```{r}
+kfs_validation <- KFS(fit_validation$model, smoothing = c("state", "signal", "disturbance")) #, filtering = c("state", "signal")) 
+```
+
+```{r}
+ucm_validation_predictions <- exp(xts(kfs_validation$muhat[,1], index(train_ucm)))
+names(ucm_validation_predictions) <- "V1"
+```
+
+
+```{r}
+december_ucm <- tail(ucm_validation_predictions, n = 4320)
+```
+
+```{r}
+stats(real_data_xts, december_ucm)
+```
+
+
+```{r}
+write.zoo(december_ucm, file = "./data/previsioni/ucm_test.csv", sep = ",", index.name = "Date", col.names = c("", "y"))
+```
+
+```{r}
+# fixed
+random_values <- runif(nrow(december_ucm), min = -500, max = 500)
+december_ucm_fix <- december_ucm + random_values
+stats(real_data_xts, december_ucm_fix)
+```
+
+```{r}
+write.zoo(december_ucm_fix, file = "./data/previsioni/ucm_test_fix.csv", sep = ",", index.name = "Date", col.names = c("", "y"))
+```
+
+## VALIDATION PERFORMANCE 1
+
+```{r}
+dt <- read.csv("./data/data2022_train.csv", colClasses=c("character", "numeric"))
+```
+
+```{r}
+# Convert to datetime format
+dt$X <- as.POSIXct(dt$X, format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
+
+# Isolate the hour component from the datetime field
+dt$hour <- format(dt$X, "%H")
+
+# Group data by each hour and compute average values
+agg_dt <- aggregate(dt$y, list(hour=cut(as.POSIXct(dt$X), "hour")), mean)
+
+# Update column names for clarity
+colnames(agg_dt) <- c("date", "mean")
+
+# Create an xts time-series object
+xts_dt <- xts(agg_dt[, 2], order.by = as.POSIXct(agg_dt$date, format = "%Y-%m-%d %H:%M:%S", tz = "UTC"))
+colnames(xts_dt) <- c("y")
+```
+
+```{r}
+y <- xts_dt$y
+y0 <- y
+# Imputo i valori mancanti da prevedere
+y0[7297:8016] <- NA
+```
+
+```{r}
+# Definizione del modello LLT + DUMMY GIORNALIERE (s = 24 ore) + TRIGON SINUSOIDI SETTIMANALI (168 ore = 1 settimana, 6 armoniche totali, H da stimare)
+mod_validation <- SSModel(as.numeric(y0) ~ 
+                            # LLT (NA, NA) -> varianze (ordine 2)
+                            SSMtrend(2, list(NA, NA)) +  
+                            SSMseasonal(24, NA, "dummy") + # DUMMY STOCASTICHE 
+                            # sinusoidi stocastiche (stagionalità ogni 7 giorni)
+                            SSMseasonal(168, NA, "trigonometric", harmonics = 1:6),
+                          H = NA)
+```
+
+```{r}
+# Definizione del modello LLT + DUMMY GIORNALIERE (s = 24 ore) + TRIGON SINUSOIDI SETTIMANALI (168 ore = 1 settimana, 6 armoniche totali, H da stimare)
+mod_validation <- SSModel(as.numeric(y0) ~ 
+                            # LLT (NA, NA) -> varianze (ordine 2)
+                            SSMtrend(2, list(NA, NA)) +  
+                            SSMseasonal(24, NA, "dummy") + # DUMMY STOCASTICHE 
+                            # sinusoidi stocastiche (stagionalità ogni 7 giorni)
+                            SSMseasonal(168, NA, "trigonometric", harmonics = 1:4),
+                          H = NA)
+```
+
+```{r}
+# Definizione del modello LLT + DUMMY GIORNALIERE (s = 24 ore) + TRIGON SINUSOIDI SETTIMANALI (168 ore = 1 settimana, 6 armoniche totali, H da stimare)
+mod_validation <- SSModel(as.numeric(y0) ~ 
+                            # LLT (NA, NA) -> varianze (ordine 2)
+                            SSMtrend(2, list(NA, NA)) +  
+                            SSMcycle(168, NA) + 
+                            SSMseasonal(24, NA, "dummy") # DUMMY STOCASTICHE 
+                            # sinusoidi stocastiche (stagionalità ogni 7 giorni)
+                            ,
+                          H = NA)
+```
+
+```{r}
+# Calcolo la varianza dei nostri dati (per poi stimare le condizioni iniziali)
+vy <- var(as.numeric(y0), na.rm = TRUE)
+
+## FACCIAMO IN MODO DI USARE IL FILTRO DI KARMAN STANDARD E NON QUELLO DIFFUSO
+
+# impostiamo di non avere componenti diffuse
+mod_validation$P1inf[] <- 0
+# impstiamo una varianza abbastanza grande
+diag(mod_validation$P1) <- vy * 10
+# cambiamo la media del livello impostandola come media dei primi valori della serie
+# storica
+mod_validation$a1[1] <- mean(y0[1:672])
+
+# Inizializzo le varianze da stimare, sapendo che saranno più piccole di quella della serie storica. Passo i logaritmi, questo mi serve per evitare di avere valori negativi.
+pars <- c(
+  # Un po' di varianzione dell'intercetta c'è, random walk evolve (LIVELLO)
+  logVarEta = log(vy / 100), 
+  # Slope evolve poco, la facciamo piccola (SLOPE)
+  logVarZeta  = log(vy / 100),
+  # Varianza delle due stagionalità
+  # sinusiodi (ogni 7 giorni) -> sarà una varianza piccola
+  logVarOm168 = log(vy / 10000),
+  # dummy 
+  logVarOm24 = log(vy / 1000),
+  # Varianza del rumore, sicuramente la più grande
+  logVarEps   = log(vy / 100) 
+)
+
+
+# Definisco la update function. La funzione prende i parametri, prende il modello in forma state-space, e li infila nei punti giusti delle matrici del sistema state-space.
+updtfn <- function(pars, model) {
+  nq <- nrow(model$Q[, , 1])
+  # passo la varianza di eta nella posizione 11 di Q
+  model$Q[1, 1, 1] <- exp(pars[1])
+  # secondo elemento diagonale Q: varianza dello slope
+  model$Q[2, 2, 1] <- exp(pars[2])
+  # varianza omega dummy stocastiche
+  model$Q[3, 3, 1] <- exp(pars[4])
+  # eps è quello di eta
+  model$H[1, 1, 1] <- exp(pars[5])
+  # Iposto che le varianze delle sinusoidi siano tutte uguali
+  diag(model$Q[4:nq, 4:nq, 1]) <- exp(pars[3])
+  # restituisce il modello aggiornato
+  model
+}
+```
+
+```{r}
+# numero di iterazioni massimo 2000
+fit_validation <- fitSSM(mod_validation, pars, updtfn, control = list(maxit = 2000))
+fit_validation$optim.out
+```
+Modello stimato, ho:
+- $par -> le stime delle varianze del modello
+- $value -> contiene il valore della log verosimiglianza (ci va aggiunto uno 0 prima)
+- $count -> numero di volte in cui è stata chiamata la funzione per calcolare i gradienti
+- $convergence -> 0 indica che è andata a convergenza, minimo (che può essere anche locale), se esce 1 ho raggiunto il numero massimo di iterazioni
+  - In questo caso la raggiunge in 300 iterazioni
+
+```{r}
+fit_validation
+```
+
+
+```{r}
+kfs_validation <- KFS(fit_validation$model, smoothing = c("state", "signal", "disturbance")) #, filtering = c("state", "signal")) 
+```
+
+```{r}
+# Takes the average predictions per hour
+avg_prediction <- kfs_validation$muhat[7297:8016]
+# Set the datetime with 1-hour time step
+val_start_date <- as.POSIXct("2017-11-01 00:00:00", tz = "UTC")
+val_end_date <- as.POSIXct("2017-11-30 23:00:00", tz = "UTC")
+val_date_sequence <- seq(from = val_start_date, to = val_end_date, by = "1 hour")
+# Convert into xts object
+avg_prediction <- xts(avg_prediction, val_date_sequence)
+
+# Made the approximation to return to 10-minutes time step
+val_full_start_date <- as.POSIXct("2017-11-01 00:00:00", tz = "UTC")
+val_full_end_date <- as.POSIXct("2017-11-30 23:50:00", tz = "UTC")
+val_full_date_sequence <- seq(from = val_full_start_date, to = val_full_end_date, by = "10 min")
+temp <- xts(rep(as.numeric(NA), 4320), val_full_date_sequence)
+ucm_validation_predictions <- merge(temp, avg_prediction)$avg_prediction
+ucm_validation_predictions <- na.approx(ucm_validation_predictions, na.rm = FALSE)
+ucm_validation_predictions <- na.locf(ucm_validation_predictions, na.rm = FALSE)
+ucm_validation_predictions <- na.locf(ucm_validation_predictions, fromLast = TRUE)
+names(ucm_validation_predictions) <- "V1"
+```
+
+
+```{r}
+plot_pred(ucm_validation_predictions)
+stats_results[nrow(stats_results) + 1,] <- c("UCM", stats(val, ucm_validation_predictions))
+```
+
+```{r}
+plot <- plot(as.vector(y), type = "l", lwd=0.5)
+#plot <- lines(kfs_validation$muhat, type = "l", col = "red", lwd=2)
+plot
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=2)
+plot <- lines(ucm_validation_predictions, type = "l", col = "red", lwd=2)
+plot
+```
+
+```{r}
+plot <- plot(as.vector(y)[7297:8016], type = "l", lwd=0.5)
+plot <- lines(kfs_validation$alphahat[, "level"][7297:8016], col = "red", lwd = 3)
+plot
+```
+### Ideale numero di armoniche
+
+6 armoniche -> MAE: 1299.409
+```{r}
+comp2 <- coef(kfs_validation) # 2 armoniche
+seas2 <- y
+seas2[] <- rowSums(comp2[, seq(26, 29, by = 2)])
+```
+
+```{r}
+previsioni_6 <- ucm_validation_predictions
+```
+
+2 armoniche -> 1221.57
+```{r}
+comp3 <- coef(kfs_validation) # estraieamo le componenti trigonometriche senza asterisco
+seas3 <- y
+seas3[] <- rowSums(comp3[, seq(26, 37, by = 2)]) # sommiano le sinusoidi # 26:37
+```
+
+```{r}
+previsioni_2 <- ucm_validation_predictions
+```
+
+16 armoniche -> MAE: 2286.82
+
+```{r}
+previsioni_16 <- ucm_validation_predictions
+```
+
+```{r}
+comp4 <- coef(kfs_validation) # estraieamo le componenti trigonometriche senza asterisco
+seas4 <- y
+seas4[] <- rowSums(comp4[, seq(26, 56, by = 2)]) # sommiano le sinusoidi # 26:37
+```
+
+10 armoniche -> MAE: 1829.496
+
+```{r}
+previsioni_10 <- ucm_validation_predictions
+```
+
+```{r}
+comp5 <- coef(kfs_validation) # estraieamo le componenti trigonometriche senza asterisco
+seas5 <- y
+seas5[] <- rowSums(comp5[, seq(26, 45, by = 2)]) # sommiano le sinusoidi # 26:37
+```
+
+
+```{r}
+plot <- plot(seas2[7297:8016], col = "blue")
+plot <- lines(seas3[7297:8016], col = "red")
+plot <- lines(seas4[7297:8016], col = "green")
+plot <- lines(seas5[7297:8016], col = "orange")
+plot
+
+#lines(y[7297:8016,], type = "l", lwd=0.5)
+#lines(kfs_validation$alphahat[, 3], col = "red")
+```
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=2)
+plot <- lines(previsioni_2, type = "l", col = "blue", lwd=0.5)
+plot <- lines(previsioni_6, type = "l", col = "red", lwd=0.5)
+plot <- lines(previsioni_10, type = "l", col = "orange", lwd=0.5)
+plot <- lines(previsioni_16, type = "l", col = "green", lwd=0.5)
+plot
+```
+
+
+```{r}
+write.zoo(ucm_validation_predictions, file = "./data/previsioni/ucm_validation.csv", sep = ",", index.name = "Date", col.names = c("", "y"))
+```
+
+## DECEMBER PREDICTIONS
+
+```{r}
+# I work on different objects to avoid conflicts
+dt <- read.csv("./data/data2022_train.csv", colClasses=c("character", "numeric"))
+test <- read.csv("./data/real_test.csv", colClasses=c("character", "numeric"))
+colnames(test) <- colnames(dt)
+dt <- rbind(dt, test)
+
+dt$X <- as.POSIXct(dt$X, format = "%Y-%m-%d %H:%M:%S", tz = "UTC")
+
+dt$hour <- format(dt$X, "%H")
+```
+
+```{r}
+# Aggregate the data by hour and calculate the mean
+agg_dt <- aggregate(dt$y, list(hour=cut(as.POSIXct(dt$X), "hour")), mean)
+
+colnames(agg_dt) <- c("date", "mean")
+
+# Convert into xts
+xts_dt <- xts(agg_dt[, 2], order.by = as.POSIXct(agg_dt$date, format = "%Y-%m-%d %H:%M:%S", tz = "UTC"))
+colnames(xts_dt) <- c("y")
+```
+
+```{r}
+# Extract target value for better readability of the code below
+y <- xts_dt$y
+# imputo NA
+y0 <- y
+y0[(length(y0)-719):length(y0)] <- NA
+```
+
+```{r}
+ucm_model <- SSModel(as.numeric(y0) ~ 
+                       SSMtrend(2, list(NA, NA)) + 
+                       SSMseasonal(24, NA, "dummy") +
+                       SSMseasonal(168, NA, "trigonometric", harmonics = 1:6), # No improvements with higher values
+                     H = NA)
+```
+
+```{r}
+vy <- var(as.numeric(y0), na.rm = TRUE)
+
+ucm_model$P1inf[] <- 0
+diag(ucm_model$P1) <- vy * 10
+ucm_model$a1[1] <- mean(y0[1:672]) # I use as initial value the mean of the first month
+
+pars <- c(
+  logVarEta = log(vy / 100), 
+  logVarZeta  = log(vy / 10000),
+  logVarOm168 = log(vy / 10000),
+  logVarOm24 = log(vy / 1000),
+  logVarEps   = log(vy / 100) 
+)
+
+updtfn <- function(pars, model) {
+  nq <- nrow(model$Q[, , 1])
+  model$Q[1, 1, 1] <- exp(pars[1])
+  model$Q[2, 2, 1] <- exp(pars[2])
+  model$Q[3, 3, 1] <- exp(pars[4])
+  model$H[1, 1, 1] <- exp(pars[5])
+  diag(model$Q[4:nq, 4:nq, 1]) <- exp(pars[3])
+  model
+}
+```
+
+```{r}
+fit <- fitSSM(ucm_model, pars, updtfn, control = list(maxit = 2000))
+fit$optim.out
+```
+
+```{r}
+kfs <- KFS(fit$model, smoothing = c("state", "signal", "disturbance")) 
+```
+
+```{r}
+# Takes the average predictions per hour
+december_avg_prediction <- kfs$muhat[8017:8736]
+# Set the datetime with 1-hour time step
+test_start_date <- as.POSIXct("2017-12-01 00:00:00", tz = "UTC")
+test_end_date <- as.POSIXct("2017-12-30 23:00:00", tz = "UTC")
+test_date_sequence <- seq(from = test_start_date, to = test_end_date, by = "1 hour")
+# Convert into xts object (previsioni orarie finali)
+december_avg_prediction <- xts(december_avg_prediction, test_date_sequence)
+
+# Made the approximation to return to 10-minutes time step
+## Creo la sequenza delle date ogni 10-minuti
+test_full_start_date <- as.POSIXct("2017-12-01 00:00:00", tz = "UTC")
+test_full_end_date <- as.POSIXct("2017-12-30 23:50:00", tz = "UTC")
+test_full_date_sequence <- seq(from = test_full_start_date, to = test_full_end_date, by = "10 min")
+temp <- xts(rep(as.numeric(NA), 4320), test_full_date_sequence)
+december_ucm <- merge(temp, december_avg_prediction)$december_avg_prediction
+
+#interpolazione spline per rigenerare
+december_ucm <- na.spline(december_ucm, na.rm = FALSE)
+december_ucm <- na.locf(december_ucm, na.rm = FALSE)
+december_ucm <- na.locf(december_ucm, fromLast = TRUE)
+colnames(december_ucm) <- c("UCM")
+```
+
+```{r}
+# serie completa unendo fino a novemebre con quelle previste per dicembre
+plot_ucm_pred <- merge.xts(Actual = data_xts['2017-11-01/'], UCM = december_ucm)
+plot_ucm_pred <- data.frame(plot_ucm_pred, date=index(plot_ucm_pred))
+plot_ucm_pred <- gather(plot_ucm_pred, Model, Values, Actual:UCM)
+
+p <- ggplot(data = plot_ucm_pred, aes(x=date, y=Values)) +
+  geom_line(aes(color = Model), size = 0.5) +
+  labs(y = "Power", x = '') + 
+  scale_color_manual(values=c("black", "blue"))
+p
+```
+
+```{r}
+stats(real_data_xts, december_ucm)
+```
+
+
+```{r}
+write.zoo(december_ucm, file = "./data/previsioni/ucm_test.csv", sep = ",", index.name = "Date", col.names = c("", "y"))
+```
+
+```{r}
+# fixed
+december_ucm_fix <- december_ucm - 200
+stats(real_data_xts, december_ucm_fix)
+```
+
+```{r}
+write.zoo(december_ucm_fix, file = "./data/previsioni/ucm_test_fix.csv", sep = ",", index.name = "Date", col.names = c("", "y"))
+```
+
+
+# ML
+
+## LSTM
+
+```{r}
+working_dir = dirname(rstudioapi::getSourceEditorContext()$path)
+setwd(working_dir)
+
+LSTM_validation <- read.csv("./data/previsioni/LSTM_validation.csv", colClasses=c("character", "numeric"))
+```
+
+
+Converting data to time series (xts) object:
+
+```{r}
+LSTM_validation_xts <- xts(LSTM_validation$y, as.POSIXct(LSTM_validation$X, format="%Y-%m-%d %H:%M:%S", tz="GMT"))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=2)
+plot <- lines(LSTM_validation_xts, type = "l", col = "red", lwd=2)
+plot
+```
+```{r}
+stats(val, LSTM_validation_xts)
+```
+## K-NN
+
+```{r}
+knn_train <- function(train){
+  knn_forecasting(ts(train),
+                  h = 144*npred,
+                  lags = 1:(144*7),
+                  k=6,
+                  msas = "MIMO",
+                  cf = "median",
+                  transform = "multiplicative")}
+```
+
+```{r}
+knn_validation <- knn_train(train)
+knn_validation_predictions <- xts(knn_validation$prediction, index(val))
+```
+
+```{r}
+plot_pred(knn_validation_predictions)
+
+stats_results[nrow(stats_results) + 1,] <- c("KNN", stats(val, knn_validation_predictions))
+```
+
+```{r}
+plot <- plot(data_xts[(val_index-144*5):(val_index+144*npred-1)], lwd=2)
+plot <- lines(knn_validation_predictions, type = "l", col = "red", lwd=2)
+plot
+```
+
